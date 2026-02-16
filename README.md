@@ -103,14 +103,14 @@ presenting a new, unique, yet still plausible network fingerprint on every singl
 The library is capable of generating a vast number of unique User-Agents and an even larger number of unique network
 fingerprints.
 
-### Unique User-Agent Strings: 684,082
+### Unique User-Agent Strings: 760,082
 
 The number of unique User-Agent strings is a product of browser versions, compatible operating systems, and other
 variable tokens (like Android device models and build numbers).
 
-- **Chromium Family (Chrome, Opera, Edge, Brave):** 684,000 combinations
-- `4 brands * 9 versions * 8 desktop OSes * 1000 build variations` = 288,000
-- `4 brands * 9 versions * 1 mobile OS (Android) * 11 device models * 1000 build variations` = 396,000
+- **Chromium Family (Chrome, Opera, Edge, Brave):** 760,000 combinations
+- `4 brands * 10 versions * 8 desktop OSes * 1000 build variations` = 320,000
+- `4 brands * 10 versions * 1 mobile OS (Android) * 11 device models * 1000 build variations` = 440,000
 - **Gecko (Firefox):** 76 combinations
 - `1 brand * 4 versions * 8 desktop OSes` = 32
 - `1 brand * 4 versions * 1 mobile OS (Android) * 11 device models` = 44
@@ -118,7 +118,7 @@ variable tokens (like Android device models and build numbers).
 - `1 brand * 2 versions * 2 desktop OSes (macOS)` = 4
 - `1 brand * 2 versions * 1 mobile OS (iOS)` = 2
 
-**Total unique User-Agent strings: 684,082**
+**Total unique User-Agent strings: 760,082**
 
 ### Unique Network Fingerprints: Billions to Practically Infinite
 
@@ -129,7 +129,7 @@ network-level data.
 - Even in the default mode, headers are randomized. For a given Chromium User-Agent, there are over **2,300** possible
   header combinations from shuffling brands in `sec-ch-ua` (6), `Accept-Encoding` (12), and choosing an
   `Accept-Language` profile (16).
-- `684,082 User-Agents * 2,304 Header Variations` ≈ **1.57 Billion** unique fingerprints.
+- `760,082 User-Agents * 2,304 Header Variations` ≈ **1.75 Billion** unique fingerprints.
 
 - **With `FingerprintProfileMaximum`:** Practically Infinite Combinations
 - The number of possibilities becomes combinatorially explosive:

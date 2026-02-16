@@ -123,6 +123,7 @@ var (
 		133: {BuildNumber: 6912, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		140: {BuildNumber: 7255, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		141: {BuildNumber: 7390, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
+		145: {BuildNumber: 7632, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 	}
 	edgeVersions = map[int]versionProfile{
 		114: {BuildNumber: 1823, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
@@ -134,6 +135,7 @@ var (
 		133: {BuildNumber: 2988, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		140: {BuildNumber: 3265, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		141: {BuildNumber: 3537, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
+		145: {BuildNumber: 3800, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 	}
 	braveVersions = chromeVersions
 

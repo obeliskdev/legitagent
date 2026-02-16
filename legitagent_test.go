@@ -9,7 +9,7 @@ func TestBrowserSpecificGeneration(t *testing.T) {
 	t.Run("Chrome", func(t *testing.T) {
 		g := NewGenerator(
 			WithBrowsers(BrowserChrome),
-			WithVersionRange(140, 140),
+			WithVersionRange(145, 145),
 			WithOS(OSWindows11),
 			WithPlatforms(PlatformDesktop),
 		)
@@ -18,8 +18,8 @@ func TestBrowserSpecificGeneration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Generate failed: %v", err)
 		}
-		if !strings.Contains(agent.UserAgent, "Chrome/140.0.7255") {
-			t.Errorf("Expected Chrome 140 UA, got: %s", agent.UserAgent)
+		if !strings.Contains(agent.UserAgent, "Chrome/145.0.7632") {
+			t.Errorf("Expected Chrome 145 UA, got: %s", agent.UserAgent)
 		}
 	})
 
