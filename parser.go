@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	utls "github.com/refraction-networking/utls"
+	"golang.org/x/net/http2"
 )
 
 var (
@@ -84,6 +85,10 @@ func parseUserAgentString(ua string) (*parsedUA, error) {
 	}
 
 	switch {
+	case strings.Contains(ua, "Android"):
+		p.OS = OSAndroid
+	case strings.Contains(ua, "CrOS"):
+		p.OS = OSChromeOS
 	case strings.Contains(ua, "Windows NT 10.0"):
 		p.OS = OSWindows11
 	case strings.Contains(ua, "iPhone"), strings.Contains(ua, "iPad"):
@@ -92,10 +97,6 @@ func parseUserAgentString(ua string) (*parsedUA, error) {
 		p.OS = osMacIntel
 	case strings.Contains(ua, "Linux"):
 		p.OS = OSLinux
-	case strings.Contains(ua, "Android"):
-		p.OS = OSAndroid
-	case strings.Contains(ua, "CrOS"):
-		p.OS = OSChromeOS
 	default:
 		return nil, ErrUnsupportedOS
 	}
@@ -142,7 +143,20 @@ func FromUserAgentString(userAgentString string, requestType RequestType) (*Agen
 
 	headers, headerOrder := buildStaticHeaders(profile, osProf, platformProf, ua.Version, fullVersion, versionProf, requestType)
 
-	helloID := findClosestChromeProfileForParser(ua.Version)
+	var helloID utls.ClientHelloID
+	if profile.ChromiumBased {
+		helloID = findClosestChromeProfileForParser(ua.Version)
+	} else {
+		helloID = versionProf.TLS.HelloID
+		if helloID == (utls.ClientHelloID{}) {
+			helloID = findClosestChromeProfileForParser(ua.Version)
+		}
+	}
+
+	var h2Settings map[http2.SettingID]uint32
+	if profile.H2Settings != nil {
+		h2Settings = profile.H2Settings()
+	}
 
 	return &Agent{
 		UserAgent:       userAgentString,
@@ -150,7 +164,7 @@ func FromUserAgentString(userAgentString string, requestType RequestType) (*Agen
 		HeaderOrder:     headerOrder,
 		ClientHelloSpec: nil,
 		ClientHelloID:   helloID,
-		H2Settings:      GetChromiumH2Settings(),
+		H2Settings:      h2Settings,
 	}, nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"testing"
 	"time"
@@ -108,6 +109,10 @@ func performCloudflareTest(agent *Agent, addr *url.URL) (*CloudflareTestData, er
 }
 
 func TestCloudflareStealth(t *testing.T) {
+	if testing.Short() || os.Getenv("LEGITAGENT_RUN_NET_TESTS") != "1" {
+		t.Skip("skipping network integration test; set LEGITAGENT_RUN_NET_TESTS=1 to run")
+	}
+
 	parse, err := url.ParseRequestURI("https://cloudflare.manfredi.io/test/")
 	if err != nil {
 		t.Fatal(err)

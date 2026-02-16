@@ -181,7 +181,7 @@ var (
 	}
 )
 
-var greaseBrands = []string{`"Not/A)Brand";v="8"`, `"Not;A Brand";v="99"`, `"Not(A:Brand";v="24"`, `"Chromium";v="99"`}
+var greaseBrands = []string{`"Not/A)Brand";v="8"`, `"Not;A Brand";v="99"`, `"Not(A:Brand";v="24"`}
 var androidDevices = []string{"Pixel 7", "Pixel 8 Pro", "SM-S928B", "SM-G991U", "SM-F936U", "2201116SG", "V2109", "SM-A525F", "Pixel 6a", "SM-A536U", "Galaxy S23 Ultra"}
 var subresourceDests = []string{"style", "script", "image", "font", "empty"}
 

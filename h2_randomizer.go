@@ -12,13 +12,23 @@ func randomizeValue(base uint32, percentage float64) uint32 {
 	}
 
 	delta := uint32(float64(base) * percentage)
-	minX := base - delta
-	if base < delta {
-		minX = 1
+	minX := uint32(1)
+	if base > delta {
+		minX = base - delta
 	}
 
 	maxX := base + delta
 	return fastrand.Number(minX, maxX)
+}
+
+func clampRange(val, min, max uint32) uint32 {
+	if val < min {
+		return min
+	}
+	if val > max {
+		return max
+	}
+	return val
 }
 
 func randomizeH2Settings(baseSettings map[http2.SettingID]uint32, profile H2RandomizationProfile) map[http2.SettingID]uint32 {
@@ -33,18 +43,47 @@ func randomizeH2Settings(baseSettings map[http2.SettingID]uint32, profile H2Rand
 			randomized[http2.SettingHeaderTableSize] = randomizeValue(val, 0.10)
 		}
 		if val, ok := randomized[http2.SettingInitialWindowSize]; ok {
-			randomized[http2.SettingInitialWindowSize] = randomizeValue(val, 0.15)
+			randomized[http2.SettingInitialWindowSize] = clampRange(randomizeValue(val, 0.15), 65535, math.MaxInt32)
+		}
+		if val, ok := randomized[http2.SettingMaxFrameSize]; ok {
+			randomized[http2.SettingMaxFrameSize] = clampRange(randomizeValue(val, 0.05), 16384, 16777215)
+		}
+		if val, ok := randomized[http2.SettingMaxConcurrentStreams]; ok {
+			randomized[http2.SettingMaxConcurrentStreams] = clampRange(randomizeValue(val, 0.10), 100, math.MaxUint32)
 		}
 		if val, ok := randomized[http2.SettingMaxHeaderListSize]; ok {
 			randomized[http2.SettingMaxHeaderListSize] = randomizeValue(val, 0.10)
 		}
 
 	case H2RandomizationProfileMaximum:
-		randomized[http2.SettingHeaderTableSize] = randomizeValue(4096, 0.20)
+		if val, ok := randomized[http2.SettingHeaderTableSize]; ok {
+			randomized[http2.SettingHeaderTableSize] = randomizeValue(val, 0.30)
+		} else {
+			randomized[http2.SettingHeaderTableSize] = randomizeValue(65536, 0.30)
+		}
 		randomized[http2.SettingEnablePush] = 0
-		randomized[http2.SettingInitialWindowSize] = randomizeValue(65535, 0.20)
-		randomized[http2.SettingMaxFrameSize] = randomizeValue(16384, 0.20)
-		randomized[http2.SettingMaxConcurrentStreams] = uint32(math.MaxUint32 - fastrand.IntN(1024))
+
+		if val, ok := randomized[http2.SettingInitialWindowSize]; ok {
+			randomized[http2.SettingInitialWindowSize] = clampRange(randomizeValue(val, 0.35), 65535, math.MaxInt32)
+		} else {
+			randomized[http2.SettingInitialWindowSize] = randomizeValue(6291456, 0.35)
+		}
+
+		if val, ok := randomized[http2.SettingMaxFrameSize]; ok {
+			randomized[http2.SettingMaxFrameSize] = clampRange(randomizeValue(val, 0.20), 16384, 16777215)
+		} else {
+			randomized[http2.SettingMaxFrameSize] = randomizeValue(16384, 0.20)
+		}
+
+		if val, ok := randomized[http2.SettingMaxConcurrentStreams]; ok {
+			randomized[http2.SettingMaxConcurrentStreams] = clampRange(randomizeValue(val, 0.50), 200, math.MaxUint32)
+		} else {
+			randomized[http2.SettingMaxConcurrentStreams] = randomizeValue(1000, 0.50)
+		}
+
+		if val, ok := randomized[http2.SettingMaxHeaderListSize]; ok {
+			randomized[http2.SettingMaxHeaderListSize] = randomizeValue(val, 0.40)
+		}
 	default:
 	}
 

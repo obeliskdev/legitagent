@@ -1,7 +1,6 @@
 package legitagent
 
 import (
-	"math"
 	"reflect"
 	"testing"
 
@@ -91,12 +90,12 @@ func TestH2RandomizationProfileMaximum(t *testing.T) {
 		t.Errorf("Expected SettingMaxFrameSize to be in a randomized range around 16384, got %d", val)
 	}
 
-	if val, ok := settings[http2.SettingMaxConcurrentStreams]; !ok || val < (math.MaxUint32-1024) {
-		t.Errorf("Expected SettingMaxConcurrentStreams to be math.MaxUint32 minus a small salt, got %d", val)
+	if val, ok := settings[http2.SettingMaxConcurrentStreams]; !ok || val < 500 || val > 1500 {
+		t.Errorf("Expected SettingMaxConcurrentStreams to remain in a realistic randomized Chromium-like range, got %d", val)
 	}
 
-	if val, ok := settings[http2.SettingInitialWindowSize]; !ok || val < 52428 || val > 78642 { // 65535 +/- 20%
-		t.Errorf("Expected SettingInitialWindowSize to be in a randomized range around 65535, got %d", val)
+	if val, ok := settings[http2.SettingInitialWindowSize]; !ok || val < 4089447 || val > 8493465 { // 6291456 +/- 35%
+		t.Errorf("Expected SettingInitialWindowSize to be in a randomized range around 6291456, got %d", val)
 	}
 }
 

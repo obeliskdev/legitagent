@@ -143,6 +143,7 @@ func (g *Generator) Generate() (*Agent, error) {
 		}
 
 		if len(eligibleBots) == 0 {
+			g.ReleaseAgent(agent)
 			return nil, fmt.Errorf("legitagent: no bot profiles found for the specified types: %v", g.botAgentTypes)
 		}
 
@@ -215,6 +216,7 @@ func (g *Generator) Generate() (*Agent, error) {
 	}
 
 	if len(finalVersions) == 0 {
+		g.ReleaseAgent(agent)
 		return nil, fmt.Errorf("legitagent: no available browser versions for %s that meet the specified criteria", browser)
 	}
 
@@ -252,6 +254,11 @@ func (g *Generator) Generate() (*Agent, error) {
 
 	if g.fingerprintProfile == FingerprintProfileMaximum {
 		headerSorter = ShuffledPriorityHeaderSorter
+	}
+
+	if !g.zeroHeader && len(g.languageProfiles) == 0 {
+		g.ReleaseAgent(agent)
+		return nil, fmt.Errorf("legitagent: no language profiles configured")
 	}
 
 	if !g.zeroHeader {

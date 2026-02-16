@@ -6,15 +6,33 @@ import (
 )
 
 func shuffleExtensions(extensions []utls.TLSExtension) []utls.TLSExtension {
-	shuffled := make([]utls.TLSExtension, len(extensions))
-	copy(shuffled, extensions)
-	fastrand.Shuffle(len(shuffled), func(i, j int) {
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	middle := make([]utls.TLSExtension, 0, len(extensions))
+	var sni utls.TLSExtension
+	var alpn utls.TLSExtension
+	for _, ext := range extensions {
+		switch ext.(type) {
+		case *utls.SNIExtension:
+			sni = ext
+		case *utls.ALPNExtension:
+			alpn = ext
+		default:
+			middle = append(middle, ext)
+		}
+	}
+
+	fastrand.Shuffle(len(middle), func(i, j int) {
+		middle[i], middle[j] = middle[j], middle[i]
 	})
 
-	final := make([]utls.TLSExtension, 0, len(shuffled)+3)
+	final := make([]utls.TLSExtension, 0, len(extensions)+3)
 	final = append(final, &utls.UtlsGREASEExtension{})
-	final = append(final, shuffled...)
+	if sni != nil {
+		final = append(final, sni)
+	}
+	final = append(final, middle...)
+	if alpn != nil {
+		final = append(final, alpn)
+	}
 	final = append(final, &utls.UtlsGREASEExtension{})
 	final = append(final, &utls.UtlsPaddingExtension{GetPaddingLen: utls.BoringPaddingStyle})
 
@@ -70,9 +88,10 @@ func ChromeLatestSpec() *utls.ClientHelloSpec {
 	}
 
 	shuffledCiphers := make([]uint16, len(cipherSuites))
-	copy(shuffledCiphers, cipherSuites)
-	fastrand.Shuffle(len(shuffledCiphers), func(i, j int) {
-		shuffledCiphers[i], shuffledCiphers[j] = shuffledCiphers[j], shuffledCiphers[i]
+	shuffledCiphers[0] = cipherSuites[0]
+	copy(shuffledCiphers[1:], cipherSuites[1:])
+	fastrand.Shuffle(len(shuffledCiphers)-1, func(i, j int) {
+		shuffledCiphers[i+1], shuffledCiphers[j+1] = shuffledCiphers[j+1], shuffledCiphers[i+1]
 	})
 
 	return &utls.ClientHelloSpec{
