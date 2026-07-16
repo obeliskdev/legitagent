@@ -1,13 +1,22 @@
 package legitagent
 
 import (
-	"math"
 	"sort"
+	"sync"
 
 	"github.com/obeliskdev/fastrand"
 )
 
 type HeaderSorter func(keys []string)
+
+const maxHeaderPriority = 1<<31 - 1
+
+var prioritiesPool = sync.Pool{
+	New: func() any {
+		s := make([]int, 0, 32)
+		return &s
+	},
+}
 
 var headerPriority = map[string]int{
 	":authority": 0, ":method": 1, ":path": 2, ":scheme": 3, ":status": 4,
@@ -71,30 +80,41 @@ func PriorityHeaderSorter(keys []string) {
 	sort.SliceStable(keys, func(i, j int) bool {
 		p1, ok1 := headerPriority[keys[i]]
 		if !ok1 {
-			p1 = math.MaxInt
+			p1 = maxHeaderPriority
 		}
 		p2, ok2 := headerPriority[keys[j]]
 		if !ok2 {
-			p2 = math.MaxInt
+			p2 = maxHeaderPriority
 		}
 		return p1 < p2
 	})
 }
 
 func ShuffledPriorityHeaderSorter(keys []string) {
-	PriorityHeaderSorter(keys)
+	if len(keys) <= 1 {
+		return
+	}
+	prioritiesPtr := prioritiesPool.Get().(*[]int)
+	priorities := (*prioritiesPtr)[:0]
+	defer func() {
+		*prioritiesPtr = priorities
+		prioritiesPool.Put(prioritiesPtr)
+	}()
+	for _, k := range keys {
+		p, ok := headerPriority[k]
+		if !ok {
+			p = maxHeaderPriority
+		}
+		priorities = append(priorities, p)
+	}
+
+	sort.SliceStable(keys, func(i, j int) bool {
+		return priorities[i] < priorities[j]
+	})
 
 	start := 0
 	for i := 1; i < len(keys); i++ {
-		p1, ok1 := headerPriority[keys[i-1]]
-		if !ok1 {
-			p1 = math.MaxInt
-		}
-		p2, ok2 := headerPriority[keys[i]]
-		if !ok2 {
-			p2 = math.MaxInt
-		}
-		if p1 != p2 {
+		if priorities[i] != priorities[i-1] {
 			if i-start > 1 {
 				fastrand.Shuffle(i-start, func(a, b int) {
 					keys[start+a], keys[start+b] = keys[start+b], keys[start+a]

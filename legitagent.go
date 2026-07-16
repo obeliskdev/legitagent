@@ -29,6 +29,7 @@ type Agent struct {
 	ClientHelloSpec *utls.ClientHelloSpec
 	ClientHelloID   utls.ClientHelloID
 	H2Settings      map[http2.SettingID]uint32
+	h2SettingsPool  *sync.Pool
 }
 
 type Generator struct {
@@ -80,8 +81,6 @@ var macArchitectures = []OperatingSystem{
 	osMacAppleSilicon,
 }
 
-var singleOSSliceBuf = [1]OperatingSystem{OSWindows}
-
 const (
 	defaultMinChromiumVersion = 114
 	defaultMaxChromiumVersion = 151
@@ -109,26 +108,26 @@ var comboPool = sync.Pool{
 
 var pseudoHeaders = []string{":method", ":authority", ":scheme", ":path"}
 
-func NewGenerator(opts ...Option) *Generator {
-	defaultLanguages := [][]AcceptHeaderPart{
-		{{Value: "en-US"}, {Value: "en", Q: 0.9}},
-		{{Value: "de-DE"}, {Value: "de", Q: 0.9}},
-		{{Value: "fa-IR"}, {Value: "fa", Q: 0.9}},
-		{{Value: "fr-FR"}, {Value: "fr", Q: 0.9}},
-		{{Value: "es-ES"}, {Value: "es", Q: 0.9}},
-		{{Value: "ja-JP"}, {Value: "ja", Q: 0.9}},
-		{{Value: "ko-KR"}, {Value: "ko", Q: 0.9}},
-		{{Value: "pt-BR"}, {Value: "pt", Q: 0.9}},
-		{{Value: "ru-RU"}, {Value: "ru", Q: 0.9}},
-		{{Value: "tr-TR"}, {Value: "tr", Q: 0.9}},
-		{{Value: "it-IT"}, {Value: "it", Q: 0.9}},
-		{{Value: "pl-PL"}, {Value: "pl", Q: 0.9}},
-		{{Value: "nl-NL"}, {Value: "nl", Q: 0.9}},
-		{{Value: "sv-SE"}, {Value: "sv", Q: 0.9}},
-		{{Value: "ar-EG"}, {Value: "ar", Q: 0.9}},
-		{{Value: "cs-CZ"}, {Value: "cs", Q: 0.9}},
-	}
+var defaultLanguages = [][]AcceptHeaderPart{
+	{{Value: "en-US"}, {Value: "en", Q: 0.9}},
+	{{Value: "de-DE"}, {Value: "de", Q: 0.9}},
+	{{Value: "fa-IR"}, {Value: "fa", Q: 0.9}},
+	{{Value: "fr-FR"}, {Value: "fr", Q: 0.9}},
+	{{Value: "es-ES"}, {Value: "es", Q: 0.9}},
+	{{Value: "ja-JP"}, {Value: "ja", Q: 0.9}},
+	{{Value: "ko-KR"}, {Value: "ko", Q: 0.9}},
+	{{Value: "pt-BR"}, {Value: "pt", Q: 0.9}},
+	{{Value: "ru-RU"}, {Value: "ru", Q: 0.9}},
+	{{Value: "tr-TR"}, {Value: "tr", Q: 0.9}},
+	{{Value: "it-IT"}, {Value: "it", Q: 0.9}},
+	{{Value: "pl-PL"}, {Value: "pl", Q: 0.9}},
+	{{Value: "nl-NL"}, {Value: "nl", Q: 0.9}},
+	{{Value: "sv-SE"}, {Value: "sv", Q: 0.9}},
+	{{Value: "ar-EG"}, {Value: "ar", Q: 0.9}},
+	{{Value: "cs-CZ"}, {Value: "cs", Q: 0.9}},
+}
 
+func NewGenerator(opts ...Option) *Generator {
 	g := &Generator{
 		browsers:               []Browser{BrowserRandom},
 		platforms:              []Platform{PlatformRandom},
@@ -194,7 +193,7 @@ func (g *Generator) Generate() (*Agent, error) {
 		agent.ClientHelloID = chosenProfile.HelloID
 
 		for k, v := range chosenProfile.Headers {
-			agent.Headers.Set(k, v)
+			headerSet(agent.Headers, k, v)
 		}
 
 		for k, vs := range agent.Headers {
@@ -214,9 +213,10 @@ func (g *Generator) Generate() (*Agent, error) {
 		keysPool.Put(keysPtr)
 
 		if g.h2Only {
-			agent.H2Settings = GetChromiumH2Settings()
+			agent.H2Settings, agent.h2SettingsPool = GetChromiumH2SettingsWithPool()
 		} else {
 			agent.H2Settings = nil
+			agent.h2SettingsPool = nil
 		}
 
 		ok = true
@@ -305,12 +305,13 @@ func (g *Generator) Generate() (*Agent, error) {
 	}
 
 	if g.h2Only {
-		agent.H2Settings = profile.H2Settings()
+		agent.H2Settings, agent.h2SettingsPool = profile.H2SettingsWithPool()
 		if g.h2RandomizationProfile != H2RandomizationProfileNone {
 			agent.H2Settings = randomizeH2Settings(agent.H2Settings, g.h2RandomizationProfile)
 		}
 	} else {
 		agent.H2Settings = nil
+		agent.h2SettingsPool = nil
 	}
 
 	if g.fingerprintProfile == FingerprintProfileMaximum {
@@ -337,7 +338,11 @@ func (g *Generator) ReleaseAgent(a *Agent) {
 	if a == nil {
 		return
 	}
+	resetAgentFields(a)
+	g.agentPool.Put(a)
+}
 
+func resetAgentFields(a *Agent) {
 	a.UserAgent = ""
 	for k, vs := range a.Headers {
 		if len(vs) > 0 {
@@ -348,8 +353,11 @@ func (g *Generator) ReleaseAgent(a *Agent) {
 	a.HeaderOrder = a.HeaderOrder[:0]
 	a.ClientHelloSpec = nil
 	a.ClientHelloID = utls.ClientHelloID{}
+	if a.H2Settings != nil && a.h2SettingsPool != nil {
+		releaseH2Settings(a.h2SettingsPool, a.H2Settings)
+	}
 	a.H2Settings = nil
-	g.agentPool.Put(a)
+	a.h2SettingsPool = nil
 }
 
 func (g *Generator) resolveBrowser() (Browser, error) {
@@ -393,10 +401,13 @@ func (g *Generator) resolvePlatformAndOS(browser Browser) (Platform, OperatingSy
 
 	for _, p := range userPlatforms {
 		for _, o := range userOSes {
-			concreteOSes := macArchitectures
-			if o != OSMac {
-				concreteOSes = singleOSSliceBuf[:1]
-				singleOSSliceBuf[0] = o
+			var concreteOSBuf [1]OperatingSystem
+			var concreteOSes []OperatingSystem
+			if o == OSMac {
+				concreteOSes = macArchitectures
+			} else {
+				concreteOSBuf[0] = o
+				concreteOSes = concreteOSBuf[:]
 			}
 
 			for _, concreteOS := range concreteOSes {
@@ -412,7 +423,7 @@ func (g *Generator) resolvePlatformAndOS(browser Browser) (Platform, OperatingSy
 				isValidForBrowser := false
 				switch browser {
 				case BrowserSafari:
-					if (p == PlatformMobile && concreteOS == OSiOS) || (p == PlatformDesktop && osProfile.Name == "macOS") {
+					if (p == PlatformMobile && concreteOS == OSiOS) || (p == PlatformDesktop && osProfile.IsMacOS) {
 						isValidForBrowser = true
 					}
 				case BrowserFirefox:
@@ -550,20 +561,39 @@ func buildSecChUa(brand, version string, isFull, randomize bool) string {
 		greaseVersion = `"99.0.0.0"`
 	}
 
-	chromium := `"Chromium";v="` + v + `"`
-	brandEntry := `"` + brand + `";v="` + v + `"`
-	greaseEntry := grease.Key + `;v=` + greaseVersion
+	sb := builderPool.Get().(*strings.Builder)
+	defer func() {
+		sb.Reset()
+		builderPool.Put(sb)
+	}()
 
-	var brands [3]string
-	brands[0] = chromium
-	brands[1] = brandEntry
-	brands[2] = greaseEntry
-
+	order := [3]int{0, 1, 2}
 	if randomize {
-		fastrand.Shuffle(3, func(i, j int) { brands[i], brands[j] = brands[j], brands[i] })
+		fastrand.Shuffle(3, func(i, j int) { order[i], order[j] = order[j], order[i] })
 	}
 
-	return brands[0] + ", " + brands[1] + ", " + brands[2]
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		switch order[i] {
+		case 0:
+			sb.WriteString(`"Chromium";v="`)
+			sb.WriteString(v)
+			sb.WriteString(`"`)
+		case 1:
+			sb.WriteString(`"`)
+			sb.WriteString(brand)
+			sb.WriteString(`";v="`)
+			sb.WriteString(v)
+			sb.WriteString(`"`)
+		case 2:
+			sb.WriteString(grease.Key)
+			sb.WriteString(`;v=`)
+			sb.WriteString(greaseVersion)
+		}
+	}
+	return sb.String()
 }
 
 var acceptEncodingEncodings = [3]string{"gzip", "deflate", "br"}
@@ -576,11 +606,22 @@ func generateAcceptEncoding() string {
 		encodings[i], encodings[j] = encodings[j], encodings[i]
 	})
 
-	result := encodings[0] + ", " + encodings[1] + ", " + encodings[2]
-	if fastrand.IntN(2) == 1 {
-		return result + ", zstd"
+	sb := builderPool.Get().(*strings.Builder)
+	defer func() {
+		sb.Reset()
+		builderPool.Put(sb)
+	}()
+
+	for i := 0; i < 3; i++ {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(encodings[i])
 	}
-	return result
+	if fastrand.IntN(2) == 1 {
+		sb.WriteString(", zstd")
+	}
+	return sb.String()
 }
 
 func buildAcceptHeader(parts []AcceptHeaderPart) string {
@@ -609,10 +650,24 @@ func buildAcceptHeader(parts []AcceptHeaderPart) string {
 				q = 0.05
 			}
 			sb.WriteString(";q=")
-			sb.WriteString(strconv.FormatFloat(q, 'f', 1, 64))
+			appendQValue(sb, q)
 		}
 	}
 	return sb.String()
+}
+
+func appendQValue(sb *strings.Builder, q float64) {
+	if q >= 1.0 {
+		sb.WriteString("1.0")
+		return
+	}
+	tenths := int(q*10 + 0.5)
+	if tenths >= 10 {
+		sb.WriteString("1.0")
+		return
+	}
+	sb.WriteString("0.")
+	sb.WriteByte('0' + byte(tenths))
 }
 
 func (g *Generator) filterVersions(profile browserProfile) []int {
@@ -629,22 +684,15 @@ func (g *Generator) filterVersions(profile browserProfile) []int {
 	allVersions := profile.VersionKeys
 	possibleVersions := make([]int, 0, len(allVersions))
 	for _, v := range allVersions {
-		if v >= g.minVersion && v <= g.maxVersion {
-			possibleVersions = append(possibleVersions, v)
+		if v < g.minVersion || v > g.maxVersion {
+			continue
 		}
-	}
-
-	if !g.h2Only {
-		return possibleVersions
-	}
-
-	finalVersions := make([]int, 0, len(possibleVersions))
-	for _, v := range possibleVersions {
-		if profile.Versions[v].SupportsH2 {
-			finalVersions = append(finalVersions, v)
+		if g.h2Only && !profile.Versions[v].SupportsH2 {
+			continue
 		}
+		possibleVersions = append(possibleVersions, v)
 	}
-	return finalVersions
+	return possibleVersions
 }
 
 func rebuildHeaderOrder(existing, keys []string) []string {

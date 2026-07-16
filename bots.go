@@ -1,6 +1,9 @@
 package legitagent
 
 import (
+	"net/textproto"
+	"strings"
+
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -280,4 +283,38 @@ func init() {
 	for _, profiles := range botProfileCategories {
 		allBotProfiles = append(allBotProfiles, profiles...)
 	}
+
+	canonCache := make(map[string]map[string]string, 16)
+	canonHeaders := func(h map[string]string) map[string]string {
+		if h == nil {
+			return nil
+		}
+		if cached, ok := canonCache[identityKey(h)]; ok {
+			return cached
+		}
+		canon := make(map[string]string, len(h))
+		for k, v := range h {
+			canon[textproto.CanonicalMIMEHeaderKey(k)] = v
+		}
+		canonCache[identityKey(h)] = canon
+		return canon
+	}
+
+	for _, profiles := range botProfileCategories {
+		for i := range profiles {
+			profiles[i].Headers = canonHeaders(profiles[i].Headers)
+		}
+	}
+
+	for i := range allBotProfiles {
+		allBotProfiles[i].Headers = canonHeaders(allBotProfiles[i].Headers)
+	}
+}
+
+func identityKey(m map[string]string) string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return strings.Join(keys, "\x00")
 }

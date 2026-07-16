@@ -3,7 +3,7 @@ module github.com/obeliskdev/legitagent
 go 1.25.0
 
 require (
-	github.com/obeliskdev/fastrand v0.0.0-20260716164520-edb8f92cdd86
+	github.com/obeliskdev/fastrand v0.0.0-20260716213900-17a1a1450fec
 	github.com/refraction-networking/utls v1.8.2
 	golang.org/x/net v0.57.0
 )

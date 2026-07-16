@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/http2"
@@ -85,28 +86,59 @@ func parseUserAgentString(ua string) (*parsedUA, error) {
 		return nil, ErrUnsupportedBrowser
 	}
 
-	switch {
-	case strings.Contains(ua, "Android"):
-		p.OS = OSAndroid
-	case strings.Contains(ua, "CrOS"):
-		p.OS = OSChromeOS
-	case strings.Contains(ua, "iPhone"), strings.Contains(ua, "iPad"):
-		p.OS = OSiOS
-	case strings.Contains(ua, "Windows NT 10.0"):
-		p.OS = OSWindows11
-	case strings.Contains(ua, "Macintosh"):
-		if p.Browser == BrowserSafari && strings.Contains(ua, "Mobile/") {
-			p.OS = OSiOS
-		} else {
-			p.OS = osMacIntel
-		}
-	case strings.Contains(ua, "Linux"):
-		p.OS = OSLinux
-	default:
+	p.OS = detectOSFromUA(ua, p.Browser)
+	if p.OS == "" {
 		return nil, ErrUnsupportedOS
 	}
 
 	return &p, nil
+}
+
+func detectOSFromUA(ua string, browser Browser) OperatingSystem {
+	for i := 0; i < len(ua); {
+		c := ua[i]
+		switch c {
+		case 'A':
+			if strings.HasPrefix(ua[i:], "Android") {
+				return OSAndroid
+			}
+			i++
+		case 'C':
+			if strings.HasPrefix(ua[i:], "CrOS") {
+				return OSChromeOS
+			}
+			i++
+		case 'i':
+			if strings.HasPrefix(ua[i:], "iPhone") || strings.HasPrefix(ua[i:], "iPad") {
+				return OSiOS
+			}
+			i++
+		case 'W':
+			if strings.HasPrefix(ua[i:], "Windows NT 10.0") {
+				return OSWindows11
+			}
+			i++
+		case 'M':
+			if strings.HasPrefix(ua[i:], "Macintosh") {
+				if browser == BrowserSafari && strings.Contains(ua, "Mobile/") {
+					return OSiOS
+				}
+				return osMacIntel
+			}
+			i++
+		case 'L':
+			if strings.HasPrefix(ua[i:], "Linux; Android") {
+				return OSAndroid
+			}
+			if strings.HasPrefix(ua[i:], "Linux") {
+				return OSLinux
+			}
+			i++
+		default:
+			i++
+		}
+	}
+	return ""
 }
 
 func FromUserAgentString(userAgentString string, requestType RequestType) (*Agent, error) {
@@ -146,7 +178,17 @@ func FromUserAgentString(userAgentString string, requestType RequestType) (*Agen
 		fullVersion = strconv.Itoa(ua.Version) + ".0." + strconv.Itoa(versionProf.BuildNumber) + ".0"
 	}
 
-	headers, headerOrder := buildStaticHeaders(profile, osProf, platformProf, ua.Version, fullVersion, versionProf, requestType)
+	agent := parserAgentPool.Get().(*Agent)
+	header := agent.Headers
+	if header == nil {
+		header = make(http.Header, 16)
+		agent.Headers = header
+	}
+	for k := range header {
+		delete(header, k)
+	}
+
+	_, headerOrder := buildStaticHeaders(profile, osProf, platformProf, ua.Version, fullVersion, versionProf, requestType, header, agent.HeaderOrder)
 
 	var helloID utls.ClientHelloID
 	if profile.ChromiumBased {
@@ -159,18 +201,36 @@ func FromUserAgentString(userAgentString string, requestType RequestType) (*Agen
 	}
 
 	var h2Settings map[http2.SettingID]uint32
-	if profile.H2Settings != nil {
-		h2Settings = profile.H2Settings()
+	var h2Pool *sync.Pool
+	if profile.H2SettingsWithPool != nil {
+		h2Settings, h2Pool = profile.H2SettingsWithPool()
 	}
 
-	return &Agent{
-		UserAgent:       userAgentString,
-		Headers:         headers,
-		HeaderOrder:     headerOrder,
-		ClientHelloSpec: nil,
-		ClientHelloID:   helloID,
-		H2Settings:      h2Settings,
-	}, nil
+	agent.UserAgent = userAgentString
+	agent.HeaderOrder = headerOrder
+	agent.ClientHelloSpec = nil
+	agent.ClientHelloID = helloID
+	agent.H2Settings = h2Settings
+	agent.h2SettingsPool = h2Pool
+
+	return agent, nil
+}
+
+var parserAgentPool = sync.Pool{
+	New: func() any {
+		return new(Agent)
+	},
+}
+
+func ReleaseParserAgent(a *Agent) {
+	if a == nil {
+		return
+	}
+	resetAgentFields(a)
+	for k := range a.Headers {
+		delete(a.Headers, k)
+	}
+	parserAgentPool.Put(a)
 }
 
 func findClosestVersionProfile(profile browserProfile, targetVersion int) (versionProfile, int, error) {
@@ -188,14 +248,7 @@ func findClosestVersionProfile(profile browserProfile, targetVersion int) (versi
 	return profile.Versions[closestVersion], closestVersion, nil
 }
 
-func buildStaticHeaders(browser browserProfile, os osProfile, platform platformProfile, version int, fullVersion string, versionProf versionProfile, requestType RequestType) (http.Header, []string) {
-	header := make(http.Header, 16)
-
-	sb := builderPool.Get().(*strings.Builder)
-	defer func() {
-		sb.Reset()
-		builderPool.Put(sb)
-	}()
+func buildStaticHeaders(browser browserProfile, os osProfile, platform platformProfile, version int, fullVersion string, versionProf versionProfile, requestType RequestType, header http.Header, existingOrder []string) (http.Header, []string) {
 
 	var acceptTemplate []AcceptHeaderPart
 	switch requestType {
@@ -209,24 +262,7 @@ func buildStaticHeaders(browser browserProfile, os osProfile, platform platformP
 		}
 	}
 
-	for i, part := range acceptTemplate {
-		if i > 0 {
-			sb.WriteString(",")
-		}
-		sb.WriteString(part.Value)
-		for _, extra := range part.Extras {
-			sb.WriteString(";")
-			sb.WriteString(extra)
-		}
-		if part.Q > 0 {
-			sb.WriteString(";q=")
-			sb.WriteString(strconv.FormatFloat(part.Q, 'f', 1, 64))
-		}
-	}
-
-	headerSet(header, hAccept, sb.String())
-	sb.Reset()
-
+	headerSet(header, hAccept, buildAcceptHeaderStatic(acceptTemplate))
 	headerSet(header, hAcceptEncoding, "gzip, deflate, br")
 	headerSet(header, hAcceptLanguage, "en-US,en;q=0.9")
 
@@ -266,10 +302,34 @@ func buildStaticHeaders(browser browserProfile, os osProfile, platform platformP
 	}
 
 	PriorityHeaderSorter(keys)
-	orderedKeys := rebuildHeaderOrder(nil, keys)
+	orderedKeys := rebuildHeaderOrder(existingOrder, keys)
 
 	*keysPtr = keys
 	keysPool.Put(keysPtr)
 
 	return header, orderedKeys
+}
+
+func buildAcceptHeaderStatic(parts []AcceptHeaderPart) string {
+	sb := builderPool.Get().(*strings.Builder)
+	defer func() {
+		sb.Reset()
+		builderPool.Put(sb)
+	}()
+
+	for i, part := range parts {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(part.Value)
+		for _, extra := range part.Extras {
+			sb.WriteString(";")
+			sb.WriteString(extra)
+		}
+		if part.Q > 0 {
+			sb.WriteString(";q=")
+			sb.WriteString(strconv.FormatFloat(part.Q, 'f', 1, 64))
+		}
+	}
+	return sb.String()
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/obeliskdev/fastrand"
 	utls "github.com/refraction-networking/utls"
@@ -43,14 +44,15 @@ type versionProfile struct {
 }
 
 type browserProfile struct {
-	Brand         string
-	Family        BrowserFamily
-	UASuffix      string
-	Versions      map[int]versionProfile
-	VersionKeys   []int
-	H2VersionKeys []int
-	ChromiumBased bool
-	H2Settings    func() map[http2.SettingID]uint32
+	Brand              string
+	Family             BrowserFamily
+	UASuffix           string
+	Versions           map[int]versionProfile
+	VersionKeys        []int
+	H2VersionKeys      []int
+	ChromiumBased      bool
+	H2Settings         func() map[http2.SettingID]uint32
+	H2SettingsWithPool func() (map[http2.SettingID]uint32, *sync.Pool)
 }
 
 type osProfile struct {
@@ -60,6 +62,7 @@ type osProfile struct {
 	Arch             string
 	BitnessHint      string
 	IsMobile         bool
+	IsMacOS          bool
 	PlatformQuote    string
 	PlatformVersionQ string
 	ArchQuote        string
@@ -162,10 +165,10 @@ var (
 	braveVersions = chromeVersions
 
 	browserProfiles = map[Browser]browserProfile{
-		BrowserChrome: {Brand: "Google Chrome", Family: Chromium, UASuffix: "", ChromiumBased: true, Versions: chromeVersions, H2Settings: GetChromiumH2Settings},
-		BrowserOpera:  {Brand: "Opera", Family: Chromium, UASuffix: "OPR/%s", ChromiumBased: true, Versions: chromeVersions, H2Settings: GetChromiumH2Settings},
-		BrowserEdge:   {Brand: "Microsoft Edge", Family: Chromium, UASuffix: "Edg/%s", ChromiumBased: true, Versions: edgeVersions, H2Settings: GetChromiumH2Settings},
-		BrowserBrave:  {Brand: "Brave", Family: Chromium, UASuffix: "", ChromiumBased: true, Versions: braveVersions, H2Settings: GetChromiumH2Settings},
+		BrowserChrome: {Brand: "Google Chrome", Family: Chromium, UASuffix: "", ChromiumBased: true, Versions: chromeVersions, H2Settings: GetChromiumH2Settings, H2SettingsWithPool: GetChromiumH2SettingsWithPool},
+		BrowserOpera:  {Brand: "Opera", Family: Chromium, UASuffix: "OPR/%s", ChromiumBased: true, Versions: chromeVersions, H2Settings: GetChromiumH2Settings, H2SettingsWithPool: GetChromiumH2SettingsWithPool},
+		BrowserEdge:   {Brand: "Microsoft Edge", Family: Chromium, UASuffix: "Edg/%s", ChromiumBased: true, Versions: edgeVersions, H2Settings: GetChromiumH2Settings, H2SettingsWithPool: GetChromiumH2SettingsWithPool},
+		BrowserBrave:  {Brand: "Brave", Family: Chromium, UASuffix: "", ChromiumBased: true, Versions: braveVersions, H2Settings: GetChromiumH2Settings, H2SettingsWithPool: GetChromiumH2SettingsWithPool},
 		BrowserFirefox: {Brand: "Firefox", Family: Gecko, ChromiumBased: false, Versions: map[int]versionProfile{
 			115: {GeckoRevision: "115.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
 			120: {GeckoRevision: "120.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
@@ -182,12 +185,12 @@ var (
 			139: {GeckoRevision: "139.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
 			140: {GeckoRevision: "140.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
 			141: {GeckoRevision: "141.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
-		}, H2Settings: GetGeckoH2Settings},
+		}, H2Settings: GetGeckoH2Settings, H2SettingsWithPool: GetGeckoH2SettingsWithPool},
 		BrowserSafari: {Brand: "Safari", Family: WebKit, ChromiumBased: false, Versions: map[int]versionProfile{
 			16: {WebKitVersion: "605.1.15", MobileVersion: "20F66", SafariVersion: "16.5", AcceptHeaderPatterns: acceptHeaderPatternsSafari, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileSafari16, SupportsH2: true},
 			17: {WebKitVersion: "605.1.15", MobileVersion: "15E148", SafariVersion: "17.5", AcceptHeaderPatterns: acceptHeaderPatternsSafari, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileSafari16, SupportsH2: true},
 			18: {WebKitVersion: "605.1.15", MobileVersion: "22B92", SafariVersion: "18.1", AcceptHeaderPatterns: acceptHeaderPatternsSafari, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileSafari16, SupportsH2: true},
-		}, H2Settings: GetWebKitH2Settings},
+		}, H2Settings: GetWebKitH2Settings, H2SettingsWithPool: GetWebKitH2SettingsWithPool},
 	}
 
 	osProfiles = map[OperatingSystem]osProfile{
@@ -255,6 +258,7 @@ func init() {
 
 	for k, op := range osProfiles {
 		op.PlatformQuote = `"` + op.Name + `"`
+		op.IsMacOS = op.Name == "macOS"
 		if op.Version != "" {
 			op.PlatformVersionQ = `"` + op.Version + `"`
 		}
@@ -287,22 +291,21 @@ func GeckoTrailGenerator(_ browserProfile, _ osProfile, _ versionProfile, _ stri
 	return "Gecko/20100101"
 }
 
-func OSGenerator(_ browserProfile, op osProfile, _ versionProfile, _ string) string {
+func resolveDeviceToken(op osProfile) string {
 	token := op.PlatformToken
 	if op.Name == "Android" {
 		device := fastrand.Choice(androidDevices)
 		token = strings.Replace(token, "{device_model}", device, 1)
 	}
-	return "(" + token + ")"
+	return token
+}
+
+func OSGenerator(_ browserProfile, op osProfile, _ versionProfile, _ string) string {
+	return "(" + resolveDeviceToken(op) + ")"
 }
 
 func FirefoxOSGenerator(_ browserProfile, op osProfile, vp versionProfile, _ string) string {
-	token := op.PlatformToken
-	if op.Name == "Android" {
-		device := fastrand.Choice(androidDevices)
-		token = strings.Replace(token, "{device_model}", device, 1)
-	}
-	return "(" + token + "; rv:" + vp.GeckoRevision + ")"
+	return "(" + resolveDeviceToken(op) + "; rv:" + vp.GeckoRevision + ")"
 }
 
 func FirefoxVersionGenerator(_ browserProfile, _ osProfile, vp versionProfile, _ string) string {
@@ -336,6 +339,9 @@ func BrowserSuffixGenerator(bp browserProfile, _ osProfile, _ versionProfile, fv
 	if bp.UASuffix == "" {
 		return ""
 	}
-	majorVersion := strings.Split(fv, ".")[0]
+	majorVersion := fv
+	if idx := strings.IndexByte(fv, '.'); idx >= 0 {
+		majorVersion = fv[:idx]
+	}
 	return fmt.Sprintf(bp.UASuffix, majorVersion)
 }

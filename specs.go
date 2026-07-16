@@ -1,12 +1,29 @@
 package legitagent
 
 import (
+	"sync"
+
 	"github.com/obeliskdev/fastrand"
 	utls "github.com/refraction-networking/utls"
 )
 
+var extensionSlicesPool = sync.Pool{
+	New: func() any {
+		s := make([]utls.TLSExtension, 0, 24)
+		return &s
+	},
+}
+
+var middleSlicesPool = sync.Pool{
+	New: func() any {
+		s := make([]utls.TLSExtension, 0, 20)
+		return &s
+	},
+}
+
 func shuffleExtensions(extensions []utls.TLSExtension) []utls.TLSExtension {
-	middle := make([]utls.TLSExtension, 0, len(extensions))
+	middlePtr := middleSlicesPool.Get().(*[]utls.TLSExtension)
+	middle := (*middlePtr)[:0]
 	var sni utls.TLSExtension
 	var alpn utls.TLSExtension
 	for _, ext := range extensions {
@@ -24,7 +41,8 @@ func shuffleExtensions(extensions []utls.TLSExtension) []utls.TLSExtension {
 		middle[i], middle[j] = middle[j], middle[i]
 	})
 
-	final := make([]utls.TLSExtension, 0, len(extensions)+3)
+	finalPtr := extensionSlicesPool.Get().(*[]utls.TLSExtension)
+	final := (*finalPtr)[:0]
 	final = append(final, &utls.UtlsGREASEExtension{})
 	if sni != nil {
 		final = append(final, sni)
@@ -36,7 +54,15 @@ func shuffleExtensions(extensions []utls.TLSExtension) []utls.TLSExtension {
 	final = append(final, &utls.UtlsGREASEExtension{})
 	final = append(final, &utls.UtlsPaddingExtension{GetPaddingLen: utls.BoringPaddingStyle})
 
+	*middlePtr = middle
+	middleSlicesPool.Put(middlePtr)
+
 	return final
+}
+
+func ReleaseExtensionSlice(s []utls.TLSExtension) {
+	s = s[:0]
+	extensionSlicesPool.Put(&s)
 }
 
 var chromeCipherSuites = []uint16{
