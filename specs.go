@@ -39,6 +39,25 @@ func shuffleExtensions(extensions []utls.TLSExtension) []utls.TLSExtension {
 	return final
 }
 
+var chromeCipherSuites = []uint16{
+	utls.GREASE_PLACEHOLDER,
+	utls.TLS_AES_128_GCM_SHA256,
+	utls.TLS_AES_256_GCM_SHA384,
+	utls.TLS_CHACHA20_POLY1305_SHA256,
+	utls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+	utls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	utls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+	utls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+	utls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+	utls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+	utls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+	utls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+	utls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+	utls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+	utls.TLS_RSA_WITH_AES_128_CBC_SHA,
+	utls.TLS_RSA_WITH_AES_256_CBC_SHA,
+}
+
 func ChromeLatestSpec() *utls.ClientHelloSpec {
 	extensions := []utls.TLSExtension{
 		&utls.SNIExtension{},
@@ -68,28 +87,9 @@ func ChromeLatestSpec() *utls.ClientHelloSpec {
 		&utls.UtlsCompressCertExtension{Algorithms: []utls.CertCompressionAlgo{utls.CertCompressionBrotli}},
 	}
 
-	cipherSuites := []uint16{
-		utls.GREASE_PLACEHOLDER,
-		utls.TLS_AES_128_GCM_SHA256,
-		utls.TLS_AES_256_GCM_SHA384,
-		utls.TLS_CHACHA20_POLY1305_SHA256,
-		utls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-		utls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-		utls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-		utls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-		utls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
-		utls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-		utls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
-		utls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
-		utls.TLS_RSA_WITH_AES_128_GCM_SHA256,
-		utls.TLS_RSA_WITH_AES_256_GCM_SHA384,
-		utls.TLS_RSA_WITH_AES_128_CBC_SHA,
-		utls.TLS_RSA_WITH_AES_256_CBC_SHA,
-	}
-
-	shuffledCiphers := make([]uint16, len(cipherSuites))
-	shuffledCiphers[0] = cipherSuites[0]
-	copy(shuffledCiphers[1:], cipherSuites[1:])
+	shuffledCiphers := make([]uint16, len(chromeCipherSuites))
+	shuffledCiphers[0] = chromeCipherSuites[0]
+	copy(shuffledCiphers[1:], chromeCipherSuites[1:])
 	fastrand.Shuffle(len(shuffledCiphers)-1, func(i, j int) {
 		shuffledCiphers[i+1], shuffledCiphers[j+1] = shuffledCiphers[j+1], shuffledCiphers[i+1]
 	})

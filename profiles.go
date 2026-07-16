@@ -2,6 +2,7 @@ package legitagent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/obeliskdev/fastrand"
@@ -46,17 +47,23 @@ type browserProfile struct {
 	Family        BrowserFamily
 	UASuffix      string
 	Versions      map[int]versionProfile
+	VersionKeys   []int
+	H2VersionKeys []int
 	ChromiumBased bool
 	H2Settings    func() map[http2.SettingID]uint32
 }
 
 type osProfile struct {
-	Name          string
-	PlatformToken string
-	Version       string
-	Arch          string
-	BitnessHint   string
-	IsMobile      bool
+	Name             string
+	PlatformToken    string
+	Version          string
+	Arch             string
+	BitnessHint      string
+	IsMobile         bool
+	PlatformQuote    string
+	PlatformVersionQ string
+	ArchQuote        string
+	BitnessQuote     string
 }
 
 type platformProfile struct {
@@ -109,6 +116,8 @@ var (
 	}
 
 	tlsProfileChrome120  = tlsProfile{HelloID: utls.HelloChrome_120}
+	tlsProfileChrome131  = tlsProfile{HelloID: utls.HelloChrome_131}
+	tlsProfileChrome133  = tlsProfile{HelloID: utls.HelloChrome_133}
 	tlsProfileFirefox120 = tlsProfile{HelloID: utls.HelloFirefox_120}
 	tlsProfileSafari16   = tlsProfile{HelloID: utls.HelloSafari_16_0}
 
@@ -117,25 +126,38 @@ var (
 		116: {BuildNumber: 5845, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		118: {BuildNumber: 5993, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		120: {BuildNumber: 6099, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		124: {BuildNumber: 6367, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		128: {BuildNumber: 6636, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		130: {BuildNumber: 6735, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		133: {BuildNumber: 6912, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		140: {BuildNumber: 7255, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		141: {BuildNumber: 7390, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		145: {BuildNumber: 7632, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
+		124: {BuildNumber: 6367, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome131, SupportsH2: true},
+		128: {BuildNumber: 6613, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome131, SupportsH2: true},
+		130: {BuildNumber: 6723, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome131, SupportsH2: true},
+		133: {BuildNumber: 6943, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		140: {BuildNumber: 7339, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		141: {BuildNumber: 7390, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		145: {BuildNumber: 7632, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		146: {BuildNumber: 7680, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		147: {BuildNumber: 7727, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		148: {BuildNumber: 7778, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		149: {BuildNumber: 7827, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		150: {BuildNumber: 7871, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		151: {BuildNumber: 7922, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
 	}
 	edgeVersions = map[int]versionProfile{
 		114: {BuildNumber: 1823, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		116: {BuildNumber: 1938, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		118: {BuildNumber: 2088, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
 		120: {BuildNumber: 2210, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		124: {BuildNumber: 2478, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		128: {BuildNumber: 2739, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		133: {BuildNumber: 2988, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		140: {BuildNumber: 3265, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		141: {BuildNumber: 3537, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
-		145: {BuildNumber: 3800, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome120, SupportsH2: true},
+		124: {BuildNumber: 2478, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome131, SupportsH2: true},
+		128: {BuildNumber: 2739, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome131, SupportsH2: true},
+		130: {BuildNumber: 2835, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome131, SupportsH2: true},
+		133: {BuildNumber: 2988, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		140: {BuildNumber: 3265, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		141: {BuildNumber: 3537, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		145: {BuildNumber: 3800, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		146: {BuildNumber: 3928, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		147: {BuildNumber: 4048, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		148: {BuildNumber: 4187, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		149: {BuildNumber: 4263, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		150: {BuildNumber: 4283, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
+		151: {BuildNumber: 4318, AcceptHeaderPatterns: acceptHeaderPatternsChrome, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileChrome133, SupportsH2: true},
 	}
 	braveVersions = chromeVersions
 
@@ -149,10 +171,22 @@ var (
 			120: {GeckoRevision: "120.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
 			127: {GeckoRevision: "127.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
 			128: {GeckoRevision: "128.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			130: {GeckoRevision: "130.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			131: {GeckoRevision: "131.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			133: {GeckoRevision: "133.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			134: {GeckoRevision: "134.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			135: {GeckoRevision: "135.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			136: {GeckoRevision: "136.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			137: {GeckoRevision: "137.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			138: {GeckoRevision: "138.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			139: {GeckoRevision: "139.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			140: {GeckoRevision: "140.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
+			141: {GeckoRevision: "141.0", AcceptHeaderPatterns: acceptHeaderPatternsFirefox, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileFirefox120, SupportsH2: true},
 		}, H2Settings: GetGeckoH2Settings},
 		BrowserSafari: {Brand: "Safari", Family: WebKit, ChromiumBased: false, Versions: map[int]versionProfile{
 			16: {WebKitVersion: "605.1.15", MobileVersion: "20F66", SafariVersion: "16.5", AcceptHeaderPatterns: acceptHeaderPatternsSafari, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileSafari16, SupportsH2: true},
 			17: {WebKitVersion: "605.1.15", MobileVersion: "15E148", SafariVersion: "17.5", AcceptHeaderPatterns: acceptHeaderPatternsSafari, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileSafari16, SupportsH2: true},
+			18: {WebKitVersion: "605.1.15", MobileVersion: "22B92", SafariVersion: "18.1", AcceptHeaderPatterns: acceptHeaderPatternsSafari, AcceptHeaderPatternsXHR: acceptHeaderPatternsXHR, TLS: tlsProfileSafari16, SupportsH2: true},
 		}, H2Settings: GetWebKitH2Settings},
 	}
 
@@ -160,13 +194,13 @@ var (
 		OSWindows:         {Name: "Windows", PlatformToken: "Windows NT 10.0; Win64; x64", Version: "10.0.0", Arch: "x86", BitnessHint: "64", IsMobile: false},
 		OSWindows11:       {Name: "Windows", PlatformToken: "Windows NT 10.0; Win64; x64", Version: "15.0.0", Arch: "x86", BitnessHint: "64", IsMobile: false},
 		osMacIntel:        {Name: "macOS", PlatformToken: "Macintosh; Intel Mac OS X 10_15_7", Version: "14.5.0", Arch: "x86", BitnessHint: "64", IsMobile: false},
-		osMacAppleSilicon: {Name: "macOS", PlatformToken: "Macintosh; ARM Mac OS X 10_15_7", Version: "14.5.0", Arch: "arm", BitnessHint: "64", IsMobile: false},
+		osMacAppleSilicon: {Name: "macOS", PlatformToken: "Macintosh; Intel Mac OS X 10_15_7", Version: "14.5.0", Arch: "arm", BitnessHint: "64", IsMobile: false},
 		OSLinux:           {Name: "Linux", PlatformToken: "X11; Linux x86_64", Version: "", Arch: "x86", BitnessHint: "64", IsMobile: false},
 		osUbuntu:          {Name: "Linux", PlatformToken: "X11; Ubuntu; Linux x86_64", Version: "", Arch: "x86", BitnessHint: "64", IsMobile: false},
 		osFedora:          {Name: "Linux", PlatformToken: "X11; Fedora; Linux x86_64", Version: "", Arch: "x86", BitnessHint: "64", IsMobile: false},
-		OSAndroid:         {Name: "Android", PlatformToken: "Linux; Android 14; {device_model}", Version: "14.0.0", Arch: "arm", BitnessHint: "64", IsMobile: true},
-		OSiOS:             {Name: "iOS", PlatformToken: "iPhone; CPU iPhone OS 17_5_1 like Mac OS X", Version: "17.5.1", IsMobile: true},
-		OSChromeOS:        {Name: "Chrome OS", PlatformToken: "X11; CrOS x86_64 14541.0.0", Version: "14541.0.0", Arch: "x86", BitnessHint: "64", IsMobile: false},
+		OSAndroid:         {Name: "Android", PlatformToken: "Linux; Android 15; {device_model}", Version: "15.0.0", Arch: "arm", BitnessHint: "64", IsMobile: true},
+		OSiOS:             {Name: "iOS", PlatformToken: "iPhone; CPU iPhone OS 18_5 like Mac OS X", Version: "18.5.0", IsMobile: true},
+		OSChromeOS:        {Name: "Chrome OS", PlatformToken: "X11; CrOS x86_64 15923.0.0", Version: "15923.0.0", Arch: "x86", BitnessHint: "64", IsMobile: false},
 	}
 
 	platformProfiles = map[Platform]platformProfile{
@@ -183,9 +217,56 @@ var (
 	}
 )
 
-var greaseBrands = []string{`"Not/A)Brand";v="8"`, `"Not;A Brand";v="99"`, `"Not(A:Brand";v="24"`}
-var androidDevices = []string{"Pixel 7", "Pixel 8 Pro", "SM-S928B", "SM-G991U", "SM-F936U", "2201116SG", "V2109", "SM-A525F", "Pixel 6a", "SM-A536U", "Galaxy S23 Ultra"}
+type greaseBrandParts struct {
+	Key     string
+	Version string
+}
+
+var greaseBrandParsed = []greaseBrandParts{
+	{Key: `"Not/A)Brand"`, Version: `"8"`},
+	{Key: `"Not;A Brand"`, Version: `"99"`},
+	{Key: `"Not(A:Brand"`, Version: `"24"`},
+}
+
+var greaseBrandDefault = greaseBrandParsed[0]
+
+var androidDevices = []string{"Pixel 8", "Pixel 8 Pro", "Pixel 9", "Pixel 9 Pro", "SM-S928B", "SM-S938B", "SM-G991U", "SM-F936U", "2201116SG", "V2109", "SM-A525F", "Pixel 6a", "SM-A536U", "SM-S926U", "SM-S931U", "CPH2615", "CPH2581"}
 var subresourceDests = []string{"style", "script", "image", "font", "empty"}
+
+func init() {
+	for k, bp := range browserProfiles {
+		keys := make([]int, 0, len(bp.Versions))
+		for v := range bp.Versions {
+			keys = append(keys, v)
+		}
+		sort.Ints(keys)
+		bp.VersionKeys = keys
+
+		h2keys := make([]int, 0, len(keys))
+		for _, v := range keys {
+			if bp.Versions[v].SupportsH2 {
+				h2keys = append(h2keys, v)
+			}
+		}
+		bp.H2VersionKeys = h2keys
+
+		browserProfiles[k] = bp
+	}
+
+	for k, op := range osProfiles {
+		op.PlatformQuote = `"` + op.Name + `"`
+		if op.Version != "" {
+			op.PlatformVersionQ = `"` + op.Version + `"`
+		}
+		if op.Arch != "" {
+			op.ArchQuote = `"` + op.Arch + `"`
+		}
+		if op.BitnessHint != "" {
+			op.BitnessQuote = `"` + op.BitnessHint + `"`
+		}
+		osProfiles[k] = op
+	}
+}
 
 func MozillaGenerator(_ browserProfile, _ osProfile, _ versionProfile, _ string) string {
 	return "Mozilla/5.0"
@@ -212,7 +293,7 @@ func OSGenerator(_ browserProfile, op osProfile, _ versionProfile, _ string) str
 		device := fastrand.Choice(androidDevices)
 		token = strings.Replace(token, "{device_model}", device, 1)
 	}
-	return fmt.Sprintf("(%s)", token)
+	return "(" + token + ")"
 }
 
 func FirefoxOSGenerator(_ browserProfile, op osProfile, vp versionProfile, _ string) string {
@@ -221,11 +302,11 @@ func FirefoxOSGenerator(_ browserProfile, op osProfile, vp versionProfile, _ str
 		device := fastrand.Choice(androidDevices)
 		token = strings.Replace(token, "{device_model}", device, 1)
 	}
-	return fmt.Sprintf("(%s; rv:%s)", token, vp.GeckoRevision)
+	return "(" + token + "; rv:" + vp.GeckoRevision + ")"
 }
 
 func FirefoxVersionGenerator(_ browserProfile, _ osProfile, vp versionProfile, _ string) string {
-	return fmt.Sprintf("Firefox/%s", vp.GeckoRevision)
+	return "Firefox/" + vp.GeckoRevision
 }
 
 func WebKitGenerator(_ browserProfile, _ osProfile, _ versionProfile, _ string) string {
@@ -233,22 +314,22 @@ func WebKitGenerator(_ browserProfile, _ osProfile, _ versionProfile, _ string) 
 }
 
 func SafariWebKitGenerator(_ browserProfile, _ osProfile, vp versionProfile, _ string) string {
-	return fmt.Sprintf("AppleWebKit/%s", vp.WebKitVersion)
+	return "AppleWebKit/" + vp.WebKitVersion
 }
 
 func SafariVersionGenerator(_ browserProfile, _ osProfile, vp versionProfile, _ string) string {
-	return fmt.Sprintf("Version/%s", vp.SafariVersion)
+	return "Version/" + vp.SafariVersion
 }
 
 func SafariMobileTokenGenerator(_ browserProfile, _ osProfile, vp versionProfile, _ string) string {
-	return fmt.Sprintf("Mobile/%s", vp.MobileVersion)
+	return "Mobile/" + vp.MobileVersion
 }
 
 func SafariBrowserVersionGenerator(_ browserProfile, op osProfile, vp versionProfile, _ string) string {
 	if op.IsMobile {
 		return "Safari/604.1"
 	}
-	return fmt.Sprintf("Safari/%s", vp.WebKitVersion)
+	return "Safari/" + vp.WebKitVersion
 }
 
 func BrowserSuffixGenerator(bp browserProfile, _ osProfile, _ versionProfile, fv string) string {

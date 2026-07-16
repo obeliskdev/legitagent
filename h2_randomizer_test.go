@@ -70,7 +70,7 @@ func TestH2RandomizationProfileNormal(t *testing.T) {
 }
 
 func TestH2RandomizationProfileMaximum(t *testing.T) {
-	g := NewGenerator(WithH2Randomization(H2RandomizationProfileMaximum))
+	g := NewGenerator(WithBrowsers(BrowserChrome), WithH2Randomization(H2RandomizationProfileMaximum))
 	agent, err := g.Generate()
 	if err != nil {
 		t.Fatalf("Failed to generate agent: %v", err)

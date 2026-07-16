@@ -1,8 +1,10 @@
 package legitagent
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -10,6 +12,14 @@ import (
 	"github.com/obeliskdev/fastrand"
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/http2"
+)
+
+var (
+	ErrNoBrowsers         = errors.New("legitagent: no browsers configured for generation")
+	ErrNoBotProfiles      = errors.New("legitagent: no bot profiles found for the specified types")
+	ErrNoVersions         = errors.New("legitagent: no available browser versions that meet the specified criteria")
+	ErrNoLanguageProfiles = errors.New("legitagent: no language profiles configured")
+	ErrNoPlatformOSCombo  = errors.New("legitagent: no compatible platform/OS combination found")
 )
 
 type Agent struct {
@@ -70,9 +80,11 @@ var macArchitectures = []OperatingSystem{
 	osMacAppleSilicon,
 }
 
+var singleOSSliceBuf = [1]OperatingSystem{OSWindows}
+
 const (
 	defaultMinChromiumVersion = 114
-	defaultMaxChromiumVersion = 145
+	defaultMaxChromiumVersion = 151
 )
 
 var builderPool = sync.Pool{
@@ -80,6 +92,22 @@ var builderPool = sync.Pool{
 		return &strings.Builder{}
 	},
 }
+
+var keysPool = sync.Pool{
+	New: func() interface{} {
+		s := make([]string, 0, 24)
+		return &s
+	},
+}
+
+var comboPool = sync.Pool{
+	New: func() interface{} {
+		s := make([]platformOSCombo, 0, 20)
+		return &s
+	},
+}
+
+var pseudoHeaders = []string{":method", ":authority", ":scheme", ":path"}
 
 func NewGenerator(opts ...Option) *Generator {
 	defaultLanguages := [][]AcceptHeaderPart{
@@ -133,7 +161,16 @@ func NewGenerator(opts ...Option) *Generator {
 
 func (g *Generator) Generate() (*Agent, error) {
 	agent := g.agentPool.Get().(*Agent)
-	agent.Headers = make(http.Header)
+	if agent.Headers == nil {
+		agent.Headers = make(http.Header, 16)
+	}
+
+	ok := false
+	defer func() {
+		if !ok {
+			g.ReleaseAgent(agent)
+		}
+	}()
 
 	if g.useBotAgents {
 		var eligibleBots []botProfile
@@ -141,15 +178,14 @@ func (g *Generator) Generate() (*Agent, error) {
 			eligibleBots = allBotProfiles
 		} else {
 			for _, botName := range g.botAgentTypes {
-				if profiles, ok := botProfileCategories[botName]; ok {
+				if profiles, botOk := botProfileCategories[botName]; botOk {
 					eligibleBots = append(eligibleBots, profiles...)
 				}
 			}
 		}
 
 		if len(eligibleBots) == 0 {
-			g.ReleaseAgent(agent)
-			return nil, fmt.Errorf("legitagent: no bot profiles found for the specified types: %v", g.botAgentTypes)
+			return nil, fmt.Errorf("%w: %v", ErrNoBotProfiles, g.botAgentTypes)
 		}
 
 		chosenProfile := fastrand.Choice(eligibleBots)
@@ -161,12 +197,21 @@ func (g *Generator) Generate() (*Agent, error) {
 			agent.Headers.Set(k, v)
 		}
 
-		keys := make([]string, 0, len(chosenProfile.Headers))
-		for k := range chosenProfile.Headers {
+		for k, vs := range agent.Headers {
+			if len(vs) == 0 {
+				delete(agent.Headers, k)
+			}
+		}
+
+		keysPtr := keysPool.Get().(*[]string)
+		keys := (*keysPtr)[:0]
+		for k := range agent.Headers {
 			keys = append(keys, k)
 		}
 		PriorityHeaderSorter(keys)
-		agent.HeaderOrder = append([]string{":method", ":authority", ":scheme", ":path"}, keys...)
+		agent.HeaderOrder = rebuildHeaderOrder(agent.HeaderOrder, keys)
+		*keysPtr = keys
+		keysPool.Put(keysPtr)
 
 		if g.h2Only {
 			agent.H2Settings = GetChromiumH2Settings()
@@ -174,12 +219,12 @@ func (g *Generator) Generate() (*Agent, error) {
 			agent.H2Settings = nil
 		}
 
+		ok = true
 		return agent, nil
 	}
 
 	browser, err := g.resolveBrowser()
 	if err != nil {
-		g.ReleaseAgent(agent)
 		return nil, err
 	}
 
@@ -187,42 +232,16 @@ func (g *Generator) Generate() (*Agent, error) {
 
 	chosenPlatform, chosenOS, err := g.resolvePlatformAndOS(browser)
 	if err != nil {
-		g.ReleaseAgent(agent)
 		return nil, err
 	}
 
 	platformProf := platformProfiles[chosenPlatform]
 	osProf := osProfiles[chosenOS]
 
-	allVersions := getVersionKeys(profile.Versions)
-	var possibleVersions []int
-
-	if g.minVersion != defaultMinChromiumVersion || g.maxVersion != defaultMaxChromiumVersion {
-		possibleVersions = make([]int, 0, len(allVersions))
-		for _, v := range allVersions {
-			if v >= g.minVersion && v <= g.maxVersion {
-				possibleVersions = append(possibleVersions, v)
-			}
-		}
-	} else {
-		possibleVersions = allVersions
-	}
-
-	var finalVersions []int
-	if g.h2Only {
-		finalVersions = make([]int, 0, len(possibleVersions))
-		for _, v := range possibleVersions {
-			if profile.Versions[v].SupportsH2 {
-				finalVersions = append(finalVersions, v)
-			}
-		}
-	} else {
-		finalVersions = possibleVersions
-	}
+	finalVersions := g.filterVersions(profile)
 
 	if len(finalVersions) == 0 {
-		g.ReleaseAgent(agent)
-		return nil, fmt.Errorf("legitagent: no available browser versions for %s that meet the specified criteria", browser)
+		return nil, fmt.Errorf("%w for %s", ErrNoVersions, browser)
 	}
 
 	version := fastrand.Choice(finalVersions)
@@ -230,7 +249,7 @@ func (g *Generator) Generate() (*Agent, error) {
 
 	fullVersion := ""
 	if profile.ChromiumBased {
-		fullVersion = fmt.Sprintf("%d.0.%d.%d", version, versionProf.BuildNumber, fastrand.IntN(999))
+		fullVersion = strconv.Itoa(version) + ".0." + strconv.Itoa(versionProf.BuildNumber) + "." + strconv.Itoa(fastrand.IntN(999))
 	}
 
 	sb := builderPool.Get().(*strings.Builder)
@@ -262,12 +281,12 @@ func (g *Generator) Generate() (*Agent, error) {
 	}
 
 	if !g.zeroHeader && len(g.languageProfiles) == 0 {
-		g.ReleaseAgent(agent)
-		return nil, fmt.Errorf("legitagent: no language profiles configured")
+		return nil, ErrNoLanguageProfiles
 	}
 
 	if !g.zeroHeader {
-		agent.Headers, agent.HeaderOrder = g.buildHeaders(
+		g.buildHeaders(
+			agent,
 			profile,
 			osProf,
 			platformProf,
@@ -277,8 +296,12 @@ func (g *Generator) Generate() (*Agent, error) {
 			headerSorter,
 		)
 	} else {
-		agent.Headers = nil
-		agent.HeaderOrder = nil
+		for k, vs := range agent.Headers {
+			if len(vs) > 0 {
+				agent.Headers[k] = vs[:0]
+			}
+		}
+		agent.HeaderOrder = agent.HeaderOrder[:0]
 	}
 
 	if g.h2Only {
@@ -298,7 +321,16 @@ func (g *Generator) Generate() (*Agent, error) {
 		agent.ClientHelloSpec = nil
 	}
 
+	ok = true
 	return agent, nil
+}
+
+func (g *Generator) MustGenerate() *Agent {
+	agent, err := g.Generate()
+	if err != nil {
+		panic(err)
+	}
+	return agent
 }
 
 func (g *Generator) ReleaseAgent(a *Agent) {
@@ -307,11 +339,13 @@ func (g *Generator) ReleaseAgent(a *Agent) {
 	}
 
 	a.UserAgent = ""
-	for k := range a.Headers {
-		delete(a.Headers, k)
+	for k, vs := range a.Headers {
+		if len(vs) > 0 {
+			a.Headers[k] = vs[:0]
+		}
 	}
 
-	a.HeaderOrder = nil
+	a.HeaderOrder = a.HeaderOrder[:0]
 	a.ClientHelloSpec = nil
 	a.ClientHelloID = utls.ClientHelloID{}
 	a.H2Settings = nil
@@ -320,34 +354,32 @@ func (g *Generator) ReleaseAgent(a *Agent) {
 
 func (g *Generator) resolveBrowser() (Browser, error) {
 	var potentialBrowsers []Browser
-	hasRandom := false
 
-	for _, b := range g.browsers {
-		if b == BrowserRandom {
-			hasRandom = true
-			break
-		}
-	}
-	if hasRandom {
+	if slices.Contains(g.browsers, BrowserRandom) {
 		potentialBrowsers = allRealBrowsers
 	} else {
 		potentialBrowsers = g.browsers
 	}
 
 	if len(potentialBrowsers) == 0 {
-		return "", fmt.Errorf("legitagent: no browsers configured for generation")
+		return "", ErrNoBrowsers
 	}
 
 	return fastrand.Choice(potentialBrowsers), nil
 }
 
-func (g *Generator) resolvePlatformAndOS(browser Browser) (Platform, OperatingSystem, error) {
-	type combo struct {
-		platform Platform
-		os       OperatingSystem
-	}
+type platformOSCombo struct {
+	platform Platform
+	os       OperatingSystem
+}
 
-	validCombos := make([]combo, 0, len(allRealPlatforms)*len(allRealOS))
+func (g *Generator) resolvePlatformAndOS(browser Browser) (Platform, OperatingSystem, error) {
+	combosPtr := comboPool.Get().(*[]platformOSCombo)
+	validCombos := (*combosPtr)[:0]
+	defer func() {
+		*combosPtr = validCombos
+		comboPool.Put(combosPtr)
+	}()
 
 	userPlatforms := g.platforms
 	if len(userPlatforms) == 1 && userPlatforms[0] == PlatformRandom {
@@ -361,12 +393,10 @@ func (g *Generator) resolvePlatformAndOS(browser Browser) (Platform, OperatingSy
 
 	for _, p := range userPlatforms {
 		for _, o := range userOSes {
-			var concreteOSes []OperatingSystem
-
-			if o == OSMac {
-				concreteOSes = append(concreteOSes, macArchitectures...)
-			} else {
-				concreteOSes = append(concreteOSes, o)
+			concreteOSes := macArchitectures
+			if o != OSMac {
+				concreteOSes = singleOSSliceBuf[:1]
+				singleOSSliceBuf[0] = o
 			}
 
 			for _, concreteOS := range concreteOSes {
@@ -394,14 +424,14 @@ func (g *Generator) resolvePlatformAndOS(browser Browser) (Platform, OperatingSy
 				}
 
 				if isValidForBrowser {
-					validCombos = append(validCombos, combo{p, concreteOS})
+					validCombos = append(validCombos, platformOSCombo{p, concreteOS})
 				}
 			}
 		}
 	}
 
 	if len(validCombos) == 0 {
-		return "", "", fmt.Errorf("no compatible platform/OS combination found for browser %s with the current settings", browser)
+		return "", "", fmt.Errorf("%w for browser %s", ErrNoPlatformOSCombo, browser)
 	}
 
 	chosenCombo := fastrand.Choice(validCombos)
@@ -409,8 +439,8 @@ func (g *Generator) resolvePlatformAndOS(browser Browser) (Platform, OperatingSy
 	return chosenCombo.platform, chosenCombo.os, nil
 }
 
-func (g *Generator) buildHeaders(browser browserProfile, os osProfile, platform platformProfile, version int, fullVersion string, versionProf versionProfile, sorter HeaderSorter) (http.Header, []string) {
-	headerMap := make(map[string]string, 16)
+func (g *Generator) buildHeaders(agent *Agent, browser browserProfile, os osProfile, platform platformProfile, version int, fullVersion string, versionProf versionProfile, sorter HeaderSorter) {
+	header := agent.Headers
 
 	var acceptTemplate [][]AcceptHeaderPart
 	if g.requestType == RequestTypeXHR {
@@ -422,131 +452,135 @@ func (g *Generator) buildHeaders(browser browserProfile, os osProfile, platform 
 	languageTemplate := fastrand.Choice(g.languageProfiles)
 
 	if g.acceptEnabled {
-		headerMap["accept"] = buildAcceptHeader(fastrand.Choice(acceptTemplate))
+		headerSet(header, hAccept, buildAcceptHeader(fastrand.Choice(acceptTemplate)))
 	}
 	if g.acceptEncodingEnabled {
-		headerMap["accept-encoding"] = generateAcceptEncoding()
+		headerSet(header, hAcceptEncoding, generateAcceptEncoding())
 	}
 
-	headerMap["accept-language"] = buildAcceptHeader(languageTemplate)
+	headerSet(header, hAcceptLanguage, buildAcceptHeader(languageTemplate))
 
 	if browser.ChromiumBased {
-		headerMap["sec-ch-ua"] = buildSecChUa(browser.Brand, strconv.Itoa(version), false, true)
-		headerMap["sec-ch-ua-mobile"] = platform.MobileHint
-		headerMap["sec-ch-ua-platform"] = fmt.Sprintf(`"%s"`, os.Name)
+		headerSet(header, hSecChUa, buildSecChUa(browser.Brand, strconv.Itoa(version), false, true))
+		headerSet(header, hSecChUaMobile, platform.MobileHint)
+		headerSet(header, hSecChUaPlatform, os.PlatformQuote)
 
 		if g.fullFingerprint {
-			headerMap["sec-ch-ua-full-version-list"] = buildSecChUa(browser.Brand, fullVersion, true, true)
-			if os.Version != "" {
-				headerMap["sec-ch-ua-platform-version"] = fmt.Sprintf(`"%s"`, os.Version)
+			headerSet(header, hSecChUaFullVersionList, buildSecChUa(browser.Brand, fullVersion, true, true))
+			if os.PlatformVersionQ != "" {
+				headerSet(header, hSecChUaPlatformVersion, os.PlatformVersionQ)
 			}
-
-			if os.Arch != "" {
-				headerMap["sec-ch-ua-arch"] = fmt.Sprintf(`"%s"`, os.Arch)
+			if os.ArchQuote != "" {
+				headerSet(header, hSecChUaArch, os.ArchQuote)
 			}
-
-			if os.BitnessHint != "" {
-				headerMap["sec-ch-ua-bitness"] = fmt.Sprintf(`"%s"`, os.BitnessHint)
+			if os.BitnessQuote != "" {
+				headerSet(header, hSecChUaBitness, os.BitnessQuote)
 			}
 		}
 	}
 
 	if g.fingerprintProfile == FingerprintProfileExtreme {
-		for k := range headerMap {
+		for k := range header {
 			if strings.HasPrefix(k, "sec-") && fastrand.Bool() {
-				delete(headerMap, k)
+				header[k] = header[k][:0]
 			}
 		}
 	}
 
 	if g.requestType == RequestTypeNavigate && browser.Brand == "Brave" {
-		headerMap["sec-gpc"] = "1"
+		headerSet(header, hSecGpc, "1")
 	}
 
 	switch g.requestType {
 	case RequestTypeNavigate:
-		headerMap["sec-fetch-dest"] = "document"
-		headerMap["sec-fetch-mode"] = "navigate"
-		headerMap["sec-fetch-site"] = "none"
-		headerMap["sec-fetch-user"] = "?1"
-		headerMap["upgrade-insecure-requests"] = "1"
+		headerSet(header, hSecFetchDest, "document")
+		headerSet(header, hSecFetchMode, "navigate")
+		headerSet(header, hSecFetchSite, "none")
+		headerSet(header, hSecFetchUser, "?1")
+		headerSet(header, hUpgradeInsecureRequests, "1")
 	case RequestTypeSubresource:
-		headerMap["sec-fetch-dest"] = fastrand.Choice(subresourceDests)
-		headerMap["sec-fetch-mode"] = "no-cors"
-		headerMap["sec-fetch-site"] = "same-origin"
+		headerSet(header, hSecFetchDest, fastrand.Choice(subresourceDests))
+		headerSet(header, hSecFetchMode, "no-cors")
+		headerSet(header, hSecFetchSite, "same-origin")
 	case RequestTypeXHR:
-		headerMap["sec-fetch-dest"] = "empty"
-		headerMap["sec-fetch-mode"] = "cors"
-		headerMap["sec-fetch-site"] = "same-origin"
+		headerSet(header, hSecFetchDest, "empty")
+		headerSet(header, hSecFetchMode, "cors")
+		headerSet(header, hSecFetchSite, "same-origin")
 	}
 
-	header := http.Header{}
-	keys := make([]string, 0, len(headerMap))
-	for k := range headerMap {
+	keysPtr := keysPool.Get().(*[]string)
+	keys := (*keysPtr)[:0]
+	for k, vs := range header {
+		if len(vs) == 0 {
+			continue
+		}
 		keys = append(keys, k)
 	}
 
 	sorter(keys)
-	orderedKeys := append([]string{":method", ":authority", ":scheme", ":path"}, keys...)
+	agent.HeaderOrder = rebuildHeaderOrder(agent.HeaderOrder, keys)
 
-	for _, k := range keys {
-		header.Set(k, headerMap[k])
+	for k, vs := range header {
+		if len(vs) == 0 {
+			delete(header, k)
+		}
 	}
 
-	return header, orderedKeys
+	*keysPtr = keys
+	keysPool.Put(keysPtr)
 }
 
 func buildSecChUa(brand, version string, isFull, randomize bool) string {
-	var greaseBrand string
+	var grease greaseBrandParts
 	if randomize {
-		greaseBrand = fastrand.Choice(greaseBrands)
+		grease = fastrand.Choice(greaseBrandParsed)
 	} else {
-		greaseBrand = `"Not/A)Brand";v="8"`
-	}
-
-	parts := strings.SplitN(greaseBrand, `;v=`, 2)
-	greaseKey := parts[0]
-	var greaseVersion string
-	if isFull {
-		greaseVersion = `"99.0.0.0"`
-	} else {
-		greaseVersion = parts[1]
+		grease = greaseBrandDefault
 	}
 
 	v := version
 	if !isFull {
-		if maj := strings.Split(version, "."); len(maj) > 0 {
-			v = maj[0]
+		if idx := strings.IndexByte(version, '.'); idx >= 0 {
+			v = version[:idx]
 		}
 	}
 
-	brands := make([]string, 0, 3)
-	brands = append(
-		brands,
-		fmt.Sprintf(`"Chromium";v="%s"`, v),
-		fmt.Sprintf(`"%s";v="%s"`, brand, v),
-		fmt.Sprintf(`%s;v=%s`, greaseKey, greaseVersion),
-	)
-
-	if randomize {
-		fastrand.Shuffle(len(brands), func(i, j int) { brands[i], brands[j] = brands[j], brands[i] })
+	greaseVersion := grease.Version
+	if isFull {
+		greaseVersion = `"99.0.0.0"`
 	}
 
-	return strings.Join(brands, ", ")
+	chromium := `"Chromium";v="` + v + `"`
+	brandEntry := `"` + brand + `";v="` + v + `"`
+	greaseEntry := grease.Key + `;v=` + greaseVersion
+
+	var brands [3]string
+	brands[0] = chromium
+	brands[1] = brandEntry
+	brands[2] = greaseEntry
+
+	if randomize {
+		fastrand.Shuffle(3, func(i, j int) { brands[i], brands[j] = brands[j], brands[i] })
+	}
+
+	return brands[0] + ", " + brands[1] + ", " + brands[2]
 }
 
-func generateAcceptEncoding() string {
-	encodings := []string{"gzip", "deflate", "br"}
+var acceptEncodingEncodings = [3]string{"gzip", "deflate", "br"}
 
-	fastrand.Shuffle(len(encodings), func(i, j int) {
+func generateAcceptEncoding() string {
+	var encodings [3]string
+	encodings = acceptEncodingEncodings
+
+	fastrand.Shuffle(3, func(i, j int) {
 		encodings[i], encodings[j] = encodings[j], encodings[i]
 	})
 
+	result := encodings[0] + ", " + encodings[1] + ", " + encodings[2]
 	if fastrand.IntN(2) == 1 {
-		return strings.Join(encodings, ", ") + ", zstd"
+		return result + ", zstd"
 	}
-
-	return strings.Join(encodings, ", ")
+	return result
 }
 
 func buildAcceptHeader(parts []AcceptHeaderPart) string {
@@ -556,7 +590,6 @@ func buildAcceptHeader(parts []AcceptHeaderPart) string {
 		builderPool.Put(sb)
 	}()
 
-	currentQ := 1.0
 	for i, part := range parts {
 		if i > 0 {
 			sb.WriteString(",")
@@ -571,21 +604,57 @@ func buildAcceptHeader(parts []AcceptHeaderPart) string {
 		}
 
 		if part.Q > 0 {
-			currentQ -= fastrand.Float64() * 0.1
-			if currentQ < 0.1 {
-				currentQ = 0.1
+			q := part.Q - fastrand.Float64()*0.05
+			if q < 0.05 {
+				q = 0.05
 			}
 			sb.WriteString(";q=")
-			sb.WriteString(strconv.FormatFloat(currentQ, 'f', 1, 64))
+			sb.WriteString(strconv.FormatFloat(q, 'f', 1, 64))
 		}
 	}
 	return sb.String()
 }
 
-func getVersionKeys(m map[int]versionProfile) []int {
-	keys := make([]int, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+func (g *Generator) filterVersions(profile browserProfile) []int {
+	defaultRange := g.minVersion == defaultMinChromiumVersion && g.maxVersion == defaultMaxChromiumVersion
+
+	if defaultRange && g.h2Only {
+		return profile.H2VersionKeys
 	}
-	return keys
+
+	if defaultRange && !g.h2Only {
+		return profile.VersionKeys
+	}
+
+	allVersions := profile.VersionKeys
+	possibleVersions := make([]int, 0, len(allVersions))
+	for _, v := range allVersions {
+		if v >= g.minVersion && v <= g.maxVersion {
+			possibleVersions = append(possibleVersions, v)
+		}
+	}
+
+	if !g.h2Only {
+		return possibleVersions
+	}
+
+	finalVersions := make([]int, 0, len(possibleVersions))
+	for _, v := range possibleVersions {
+		if profile.Versions[v].SupportsH2 {
+			finalVersions = append(finalVersions, v)
+		}
+	}
+	return finalVersions
+}
+
+func rebuildHeaderOrder(existing, keys []string) []string {
+	needed := len(pseudoHeaders) + len(keys)
+	if cap(existing) >= needed {
+		existing = existing[:needed]
+	} else {
+		existing = make([]string, needed)
+	}
+	n := copy(existing, pseudoHeaders)
+	copy(existing[n:], keys)
+	return existing
 }

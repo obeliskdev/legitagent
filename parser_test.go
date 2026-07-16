@@ -55,6 +55,20 @@ func TestFromUserAgentString(t *testing.T) {
 		}
 	})
 
+	t.Run("Chrome 151 Parse", func(t *testing.T) {
+		ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+		agent, err := FromUserAgentString(ua, RequestTypeNavigate)
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+		if agent.ClientHelloID != utls.HelloChrome_133 {
+			t.Error("Expected ClientHelloID for Chrome 151 to be HelloChrome_133")
+		}
+		if !strings.Contains(agent.Headers.Get("sec-ch-ua"), `"Google Chrome";v="151"`) {
+			t.Errorf("sec-ch-ua header is incorrect: %s", agent.Headers.Get("sec-ch-ua"))
+		}
+	})
+
 	t.Run("Successful Firefox Parse", func(t *testing.T) {
 		ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
 		agent, err := FromUserAgentString(ua, RequestTypeNavigate)
@@ -125,6 +139,39 @@ func TestFromUserAgentString(t *testing.T) {
 		}
 		if chromeOSParsed.OS != OSChromeOS {
 			t.Fatalf("Expected ChromeOS OS, got %s", chromeOSParsed.OS)
+		}
+	})
+
+	t.Run("iOS Chrome (CriOS) Parsed Correctly", func(t *testing.T) {
+		ua := "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.7339.81 Mobile/15E148 Safari/604.1"
+		agent, err := FromUserAgentString(ua, RequestTypeNavigate)
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+		if agent.ClientHelloID != utls.HelloChrome_133 {
+			t.Errorf("Expected HelloChrome_133 for CriOS 140, got %v", agent.ClientHelloID)
+		}
+	})
+
+	t.Run("iOS Firefox (FxiOS) Parsed Correctly", func(t *testing.T) {
+		ua := "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/140.0 Mobile/15E148 Safari/604.1"
+		agent, err := FromUserAgentString(ua, RequestTypeNavigate)
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+		if agent.ClientHelloID != utls.HelloFirefox_120 {
+			t.Errorf("Expected HelloFirefox_120 for FxiOS 140, got %v", agent.ClientHelloID)
+		}
+	})
+
+	t.Run("iOS Edge (EdgiOS) Parsed Correctly", func(t *testing.T) {
+		ua := "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) EdgiOS/140.0.0.0 Mobile/15E148 Safari/604.1"
+		agent, err := FromUserAgentString(ua, RequestTypeNavigate)
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+		if !strings.Contains(agent.Headers.Get("sec-ch-ua"), `"Microsoft Edge";v="140"`) {
+			t.Errorf("Expected Edge sec-ch-ua for EdgiOS 140, got: %s", agent.Headers.Get("sec-ch-ua"))
 		}
 	})
 }

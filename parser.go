@@ -23,11 +23,12 @@ var (
 		Regex   *regexp.Regexp
 	}{
 		{BrowserSafari, regexp.MustCompile(`Version/(\d+)\..*Safari/`)},
-		{BrowserEdge, regexp.MustCompile(`Edg/(\d+)\.\d+`)},
+		{BrowserEdge, regexp.MustCompile(`Edg(?:i|A)?OS?/(\d+)\.\d+`)},
 		{BrowserOpera, regexp.MustCompile(`OPR/(\d+)\.\d+`)},
+		{BrowserOpera, regexp.MustCompile(`OPT/(\d+)\.\d+`)},
 		{BrowserBrave, regexp.MustCompile(`Brave/(\d+)\.\d+`)},
-		{BrowserChrome, regexp.MustCompile(`Chrome/(\d+)\.\d+`)},
-		{BrowserFirefox, regexp.MustCompile(`Firefox/(\d+)\.\d+`)},
+		{BrowserChrome, regexp.MustCompile(`(?:CriOS|Chrome)/(\d+)\.\d+`)},
+		{BrowserFirefox, regexp.MustCompile(`(?:FxiOS|Firefox)/(\d+)\.\d+`)},
 	}
 )
 
@@ -89,12 +90,16 @@ func parseUserAgentString(ua string) (*parsedUA, error) {
 		p.OS = OSAndroid
 	case strings.Contains(ua, "CrOS"):
 		p.OS = OSChromeOS
-	case strings.Contains(ua, "Windows NT 10.0"):
-		p.OS = OSWindows11
 	case strings.Contains(ua, "iPhone"), strings.Contains(ua, "iPad"):
 		p.OS = OSiOS
+	case strings.Contains(ua, "Windows NT 10.0"):
+		p.OS = OSWindows11
 	case strings.Contains(ua, "Macintosh"):
-		p.OS = osMacIntel
+		if p.Browser == BrowserSafari && strings.Contains(ua, "Mobile/") {
+			p.OS = OSiOS
+		} else {
+			p.OS = osMacIntel
+		}
 	case strings.Contains(ua, "Linux"):
 		p.OS = OSLinux
 	default:
@@ -131,14 +136,14 @@ func FromUserAgentString(userAgentString string, requestType RequestType) (*Agen
 		return nil, fmt.Errorf("internal error: no platform profile for %s", platform)
 	}
 
-	versionProf, _, err := findClosestVersionProfile(profile.Versions, ua.Version)
+	versionProf, _, err := findClosestVersionProfile(profile, ua.Version)
 	if err != nil {
 		return nil, err
 	}
 
 	fullVersion := ""
 	if profile.ChromiumBased {
-		fullVersion = fmt.Sprintf("%d.0.%d.0", ua.Version, versionProf.BuildNumber)
+		fullVersion = strconv.Itoa(ua.Version) + ".0." + strconv.Itoa(versionProf.BuildNumber) + ".0"
 	}
 
 	headers, headerOrder := buildStaticHeaders(profile, osProf, platformProf, ua.Version, fullVersion, versionProf, requestType)
@@ -168,9 +173,9 @@ func FromUserAgentString(userAgentString string, requestType RequestType) (*Agen
 	}, nil
 }
 
-func findClosestVersionProfile(versions map[int]versionProfile, targetVersion int) (versionProfile, int, error) {
+func findClosestVersionProfile(profile browserProfile, targetVersion int) (versionProfile, int, error) {
 	closestVersion := -1
-	for v := range versions {
+	for _, v := range profile.VersionKeys {
 		if v <= targetVersion && v > closestVersion {
 			closestVersion = v
 		}
@@ -180,11 +185,11 @@ func findClosestVersionProfile(versions map[int]versionProfile, targetVersion in
 		return versionProfile{}, 0, ErrUnsupportedVersion
 	}
 
-	return versions[closestVersion], closestVersion, nil
+	return profile.Versions[closestVersion], closestVersion, nil
 }
 
 func buildStaticHeaders(browser browserProfile, os osProfile, platform platformProfile, version int, fullVersion string, versionProf versionProfile, requestType RequestType) (http.Header, []string) {
-	headerMap := make(map[string]string)
+	header := make(http.Header, 16)
 
 	sb := builderPool.Get().(*strings.Builder)
 	defer func() {
@@ -219,52 +224,52 @@ func buildStaticHeaders(browser browserProfile, os osProfile, platform platformP
 		}
 	}
 
-	headerMap["accept"] = sb.String()
+	headerSet(header, hAccept, sb.String())
 	sb.Reset()
 
-	headerMap["accept-encoding"] = "gzip, deflate, br"
-	headerMap["accept-language"] = "en-US,en;q=0.9"
+	headerSet(header, hAcceptEncoding, "gzip, deflate, br")
+	headerSet(header, hAcceptLanguage, "en-US,en;q=0.9")
 
 	if browser.ChromiumBased {
-		headerMap["sec-ch-ua"] = buildSecChUa(browser.Brand, strconv.Itoa(version), false, false)
-		headerMap["sec-ch-ua-mobile"] = platform.MobileHint
-		headerMap["sec-ch-ua-platform"] = fmt.Sprintf(`"%s"`, os.Name)
-		headerMap["sec-ch-ua-full-version-list"] = buildSecChUa(browser.Brand, fullVersion, true, false)
-		if os.Version != "" {
-			headerMap["sec-ch-ua-platform-version"] = fmt.Sprintf(`"%s"`, os.Version)
+		headerSet(header, hSecChUa, buildSecChUa(browser.Brand, strconv.Itoa(version), false, false))
+		headerSet(header, hSecChUaMobile, platform.MobileHint)
+		headerSet(header, hSecChUaPlatform, os.PlatformQuote)
+		headerSet(header, hSecChUaFullVersionList, buildSecChUa(browser.Brand, fullVersion, true, false))
+		if os.PlatformVersionQ != "" {
+			headerSet(header, hSecChUaPlatformVersion, os.PlatformVersionQ)
 		}
-		if os.Arch != "" {
-			headerMap["sec-ch-ua-arch"] = fmt.Sprintf(`"%s"`, os.Arch)
+		if os.ArchQuote != "" {
+			headerSet(header, hSecChUaArch, os.ArchQuote)
 		}
-		if os.BitnessHint != "" {
-			headerMap["sec-ch-ua-bitness"] = fmt.Sprintf(`"%s"`, os.BitnessHint)
+		if os.BitnessQuote != "" {
+			headerSet(header, hSecChUaBitness, os.BitnessQuote)
 		}
 	}
 
 	switch requestType {
 	case RequestTypeNavigate:
-		headerMap["sec-fetch-dest"] = "document"
-		headerMap["sec-fetch-mode"] = "navigate"
-		headerMap["sec-fetch-site"] = "none"
-		headerMap["sec-fetch-user"] = "?1"
-		headerMap["upgrade-insecure-requests"] = "1"
+		headerSet(header, hSecFetchDest, "document")
+		headerSet(header, hSecFetchMode, "navigate")
+		headerSet(header, hSecFetchSite, "none")
+		headerSet(header, hSecFetchUser, "?1")
+		headerSet(header, hUpgradeInsecureRequests, "1")
 	case RequestTypeXHR:
-		headerMap["sec-fetch-dest"] = "empty"
-		headerMap["sec-fetch-mode"] = "cors"
-		headerMap["sec-fetch-site"] = "same-origin"
+		headerSet(header, hSecFetchDest, "empty")
+		headerSet(header, hSecFetchMode, "cors")
+		headerSet(header, hSecFetchSite, "same-origin")
 	}
 
-	header := http.Header{}
-	keys := make([]string, 0, len(headerMap))
-	for k := range headerMap {
+	keysPtr := keysPool.Get().(*[]string)
+	keys := (*keysPtr)[:0]
+	for k := range header {
 		keys = append(keys, k)
 	}
 
 	PriorityHeaderSorter(keys)
-	orderedKeys := append([]string{":method", ":authority", ":scheme", ":path"}, keys...)
-	for _, k := range keys {
-		header.Set(k, headerMap[k])
-	}
+	orderedKeys := rebuildHeaderOrder(nil, keys)
+
+	*keysPtr = keys
+	keysPool.Put(keysPtr)
 
 	return header, orderedKeys
 }

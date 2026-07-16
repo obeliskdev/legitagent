@@ -1,8 +1,11 @@
 package legitagent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 func TestBrowserSpecificGeneration(t *testing.T) {
@@ -93,6 +96,56 @@ func TestBrowserSpecificGeneration(t *testing.T) {
 			t.Errorf("Expected Opera 128 UA, got: %s", agent.UserAgent)
 		}
 	})
+
+	t.Run("Chrome 151", func(t *testing.T) {
+		g := NewGenerator(
+			WithBrowsers(BrowserChrome),
+			WithVersionRange(151, 151),
+			WithOS(OSWindows11),
+			WithPlatforms(PlatformDesktop),
+		)
+
+		agent, err := g.Generate()
+		if err != nil {
+			t.Fatalf("Generate failed: %v", err)
+		}
+
+		if !strings.Contains(agent.UserAgent, "Chrome/151.0.7922") {
+			t.Errorf("Expected Chrome 151 UA, got: %s", agent.UserAgent)
+		}
+	})
+}
+
+func TestTLSProfileMapping(t *testing.T) {
+	tests := []struct {
+		version         int
+		expectedHelloID utls.ClientHelloID
+	}{
+		{120, utls.HelloChrome_120},
+		{124, utls.HelloChrome_131},
+		{128, utls.HelloChrome_131},
+		{133, utls.HelloChrome_133},
+		{145, utls.HelloChrome_133},
+		{151, utls.HelloChrome_133},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("Chrome_%d", tt.version), func(t *testing.T) {
+			g := NewGenerator(
+				WithBrowsers(BrowserChrome),
+				WithVersionRange(tt.version, tt.version),
+				WithOS(OSWindows11),
+				WithPlatforms(PlatformDesktop),
+			)
+			agent, err := g.Generate()
+			if err != nil {
+				t.Fatalf("Generate failed: %v", err)
+			}
+			defer g.ReleaseAgent(agent)
+			if agent.ClientHelloID != tt.expectedHelloID {
+				t.Errorf("Chrome %d: expected %v, got %v", tt.version, tt.expectedHelloID, agent.ClientHelloID)
+			}
+		})
+	}
 }
 
 func TestFullFingerprintOption(t *testing.T) {
